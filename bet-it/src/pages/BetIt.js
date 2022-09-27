@@ -1,7 +1,6 @@
 import Header from "../components/Header/Header";
 import Card from "../components/Card/Card";
 import { useModal } from 'react-hooks-use-modal';
-import { useWallet } from "use-wallet";
 import classNames from 'classnames'
 import './betit.scss'
 import { useState, useEffect, useCallback } from "react";
@@ -15,10 +14,10 @@ export default function BetIt({ lang, getLang, actions }) {
   const [stepNow, setStepNow] = useState(1)
   const [isFixed, setIsFixed] = useState(false)
   const [bTokens, symbols] = usePool();
+  console.log(bTokens, symbols)
   const [collect, setCollect] = useState(true)
   const [openSymbol, setOpenSymbol] = useState("")
   const [isExpand, setIsExpand] = useState();
-  const wallet = useWallet();
   const mobile = isMobile()
   const [CardModal, openCardModal, closeCardModal] = useModal('root', {
     preventScroll: true,
@@ -85,7 +84,6 @@ export default function BetIt({ lang, getLang, actions }) {
   }
 
   useEffect(() => {
-
     if (symbols.length) {
       document.removeEventListener('scroll', setCard)
       document.addEventListener('scroll', setCard, true);
@@ -94,16 +92,6 @@ export default function BetIt({ lang, getLang, actions }) {
       document.removeEventListener('scroll', setCard)
     }
   }, [symbols])
-
-  useEffect(() => {
-    if (actions) {
-      actions.onGlobalStateChange(state => {
-        if(state.wallet.status === "connected"){
-          wallet.connect()
-        }
-      })
-    }
-  }, [actions])
 
   return (
     <>
@@ -116,16 +104,6 @@ export default function BetIt({ lang, getLang, actions }) {
         <Header lang={lang} collect={collect} switchMenu={switchMenu}></Header>
         <div className="main-body">
           {mobile ? <PnlBar lang={lang} className='total-pnl-box mobile-total-pnl-box' /> : null}
-          {/* <div className='title-box'>
-            <div className='title-des'>
-              <div className='title-text'>
-                {lang['title-one']}
-              </div>
-              <div className='title-text-des'>
-                {lang['title-two']}
-              </div>
-            </div>
-          </div> */}
           <CardModal>
             <TinderCard bTokens={bTokens} openSymbol={openSymbol} closeModal={closeCardModal} lang={lang} symbols={symbols} getLang={getLang} />
           </CardModal>
@@ -133,7 +111,7 @@ export default function BetIt({ lang, getLang, actions }) {
           <div className={classNames("card-list", { "list-mobile": mobile })}>
             {symbols && symbols.map((item, index) => {
               return (
-                <Card info={item} showCardModal={showCardModal} bTokens={bTokens} lang={lang} key={index} getLang={getLang} />
+                <Card key={index} info={item} showCardModal={showCardModal} bTokens={bTokens} lang={lang} getLang={getLang} />
               )
             })}
           </div>

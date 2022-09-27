@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Icon, Button } from '@deri/eco-common';
 import classNames from 'classnames'
 // import Button from '../Button/Button'
@@ -12,7 +12,6 @@ import DeriNumberFormat from "../../utils/DeriNumberFormat";
 import LineChart from "../LineChart/LineChart";
 import { eqInNumber, getBtokenAmount, hasParent } from "../../utils/utils";
 import { DeriEnv, bg } from '../../web3'
-let timer;
 export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
   const [amount, setAmount] = useState(100)
   const [betInfo, setBetInfo] = useState({})
@@ -21,6 +20,7 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
   const [disabled, setDisabled] = useState(true)
   const [inputDisabled, setInputDisabled] = useState(true)
   const [isLiquidated, setIsLiquidated] = useState(false)
+  const isInitBalance = useRef()
   const wallet = useWallet();
   const chains = useChain()
   const chain = chains.find((item) => eqInNumber(item.chainId, wallet.chainId))
@@ -33,7 +33,6 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
     return chains.find((item) => eqInNumber(item.chainId, wallet.chainId))
   }
 
-
   const getBetInfo = async () => {
     if (wallet.isConnected()) {
       let res = await ApiProxy.request("getBetInfo", { chainId: wallet.chainId, accountAddress: wallet.account, symbol: info.symbol })
@@ -41,7 +40,7 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
         setBetInfo(res)
         return res
       }
-    } else if (wallet.status === "disconnected") {
+    } else if (wallet.status === "disconnected" && !wallet.account) {
       let chainId = DeriEnv.get() === "prod" ? 56 : 97
       let res = await ApiProxy.request("getBetInfo", { chainId: chainId, symbol: info.symbol })
       if (res.symbol) {
@@ -54,21 +53,11 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
 
   const getLiquidationInfo = async () => {
     if (wallet.isConnected()) {
-      let res = await ApiProxy.request("getLiquidationInfo", { chainId: wallet.chainId, accountAddress: "0x5b984a638506797d1e6e50B4e310d8ab377D3F49", symbol: info.symbol })
+      let res = await ApiProxy.request("getLiquidationInfo", { chainId: wallet.chainId, accountAddress: wallet.account, symbol: info.symbol })
       if (res) {
-        console.log("getLiquidationInfo", res.symbol, res.liquidate)
         setIsLiquidated(res.liquidate)
       }
     }
-  }
-
-  const getBetInfoTimeOut = (action) => {
-    timer = window.setTimeout(async () => {
-      let res = await action();
-      if (res) {
-        getBetInfoTimeOut(action);
-      }
-    }, 6000)
   }
 
   const getIsApprove = async () => {
@@ -78,44 +67,42 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
 
   const getWalletBalance = async () => {
     let res = await ApiProxy.request("getWalletBalance", { chainId: wallet.chainId, bTokenSymbol: bToken, accountAddress: wallet.account })
-    let token = getBtokenAmount(bToken)
-    if (+res >= 0) {
+    if (+res >= 0 && isInitBalance.current) {
+      let token = getBtokenAmount(bToken)
       let amount = +(bg(res).div(bg(2)).toString())
       amount = amount > token.max ? token.max : amount.toFixed(token.decimalScale)
       setAmount(amount)
+      isInitBalance.current = false
     }
     setBalance(res)
   }
 
-
   const betClose = async (event) => {
     event.preventDefault()
-    let params = { includeResponse: true, write: true, subject: 'CLOSE', chainId: wallet.chainId, symbol: betInfo.symbol, accountAddress: wallet.account }
+    let params = {
+      includeResponse: true,
+      write: true,
+      subject: 'CLOSE',
+      chainId: wallet.chainId,
+      symbol: betInfo.symbol,
+      accountAddress: wallet.account,
+      title: {
+        processing: `${+betInfo.volume < 0 ? lang['buy-order-executed'] : lang['sell-order-executed']} Processing`,
+        success: `${+betInfo.volume < 0 ? lang['buy-order-executed'] : lang['sell-order-executed']}`,
+        error: lang['transaction-failed']
+      },
+      content: {
+        success: `${+betInfo.volume < 0 ? lang['buy'] : lang['sell']}  ${Math.abs(betInfo.volume)} ${info.unit} ${betInfo.isPowerSymbol ? lang['powers'] : ""} `,
+        error: `${+betInfo.volume < 0 ? lang['buy-order-failed'] : lang['sell-order-failed']}`
+      }
+    }
     let res = await ApiProxy.request("closeBet", params)
     if (res.success) {
-      alert.success(`${+betInfo.volume < 0 ? lang['buy'] : lang['sell']}  ${res.response.data.volume} ${info.unit} ${betInfo.isPowerSymbol ? lang['powers'] : ""} `, {
-        timeout: 8000,
-        isTransaction: true,
-        transactionHash: res.response.data.transactionHash,
-        link: `${chain.viewUrl}/tx/${res.response.data.transactionHash}`,
-        title: `${+betInfo.volume < 0 ? lang['buy-order-executed'] : lang['sell-order-executed']}`
-      })
-    } else {
-      if (res.response.transactionHash === "") {
-        return false;
-      }
-      alert.error(`${lang['transaction-failed']} : ${res.response.error}`, {
-        timeout: 300000,
-        isTransaction: true,
-        transactionHash: res.response.transactionHash,
-        link: `${chain.viewUrl}/tx/${res.response.transactionHash}`,
-        title: lang['buy-order-failed']
-      })
+      getLiquidationInfo()
+      getWalletBalance()
+      await getBetInfo()
     }
     console.log("betClose", res)
-    getBetInfo()
-    getLiquidationInfo()
-
     return true
   }
 
@@ -152,30 +139,52 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
     let isApproved = await getIsApprove()
     let direction = type === "up" || type === "boostedUp" ? "long" : "short"
     let boostedUp = type === "boostedUp" ? true : false
-    let params = { includeResponse: true, write: true, subject: type.toUpperCase(), chainId: wallet.chainId, bTokenSymbol: bToken, amount: amount, symbol: info.symbol, accountAddress: wallet.account, boostedUp: boostedUp, direction: direction }
-    if (!isApproved) {
-      let paramsApprove = { includeResponse: true, write: true, subject: 'APPROVE', chainId: wallet.chainId, bTokenSymbol: bToken, accountAddress: wallet.account, direction: direction, approved: false }
+    let params = {
+      includeResponse: true,
+      write: true,
+      subject: type.toUpperCase(),
+      chainId: wallet.chainId,
+      bTokenSymbol: bToken,
+      amount: amount,
+      symbol: info.symbol,
+      accountAddress: wallet.account,
+      boostedUp: boostedUp,
+      direction: direction,
+      title: {
+        processing: `${direction === "long" ? lang['buy-order-executed'] : lang['sell-order-executed']} Processing`,
+        success: `${direction === "long" ? lang['buy-order-executed'] : lang['sell-order-executed']}`,
+        error: `${direction === "long" ? lang['buy-order-failed'] : lang['sell-order-failed']}`
+      },
+      content: {
+        success: `${direction === "long" ? lang['buy'] : lang['sell']}  $[volume] ${info.unit} ${betInfo.isPowerSymbol ? lang['powers'] : ""} `,
+        error: `${direction === "long" ? lang['buy-order-failed'] : lang['sell-order-failed']}`,
+        isVolume: true,
+      }
+    }
+    if (!isApproved.isUnlocked) {
+      let paramsApprove = {
+        includeResponse: true,
+        write: true,
+        subject: 'APPROVE',
+        chainId: wallet.chainId,
+        bTokenSymbol: bToken,
+        accountAddress: wallet.account,
+        direction: direction,
+        approved: false,
+        approveTip: isApproved.isZero ? "" : "Changing approved amount may result transaction failure",
+        title: {
+          processing: "Approve Processing",
+          success: "Approve Executed ",
+          error: 'Approve Failed'
+        },
+        content: {
+          success: `Approve ${bToken}`,
+          error: "Transaction Failed"
+        }
+      }
       let approved = await ApiProxy.request("unlock", paramsApprove)
       if (approved) {
-        if (approved.success) {
-          alert.success(`Approve ${bToken}`, {
-            timeout: 8000,
-            isTransaction: true,
-            transactionHash: approved.response.data.transactionHash,
-            link: `${chain.viewUrl}/tx/${approved.response.data.transactionHash}`,
-            title: 'Approve Executed'
-          })
-        } else {
-          if (approved.transactionHash === "") {
-            return false;
-          }
-          alert.error(`Transaction Failed ${approved.response.error.message}`, {
-            timeout: 300000,
-            isTransaction: true,
-            transactionHash: approved.response.transactionHash,
-            link: `${chain.viewUrl}/tx/${approved.response.transactionHash}`,
-            title: 'Approve Failed'
-          })
+        if (!approved.success) {
           return false;
         }
       }
@@ -183,18 +192,12 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
     }
     let res = await ApiProxy.request("openBet", params)
     console.log(type, res)
-    getBetInfo()
-    getLiquidationInfo()
-    if (res.success) {
-      alert.success(`${+res.response.data.volume > 0 ? lang['buy'] : lang['sell']} ${res.response.data.volume} ${info.unit} ${boostedUp ? lang['powers'] : ''} `, {
-        timeout: 8000,
-        isTransaction: true,
-        transactionHash: res.response.data.transactionHash,
-        link: `${chain.viewUrl}/tx/${res.response.data.transactionHash}`,
-        title: `${direction === "long" ? lang['buy-order-executed'] : lang['sell-order-executed']}`
-      })
+    if (res && res.success) {
+      getWalletBalance()
+      getLiquidationInfo()
+      await getBetInfo()
     } else {
-      if (res.response.error.code === 1001) {
+      if (res && res.response.error.code === 1001) {
         alert.error("Increase the input amount to open positions", {
           timeout: 300000,
           isTransaction: true,
@@ -202,16 +205,6 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
         })
         return false;
       }
-      if (res.response.transactionHash === "") {
-        return false;
-      }
-      alert.error(`${lang['transaction-failed']} : ${res.response.error.message}`, {
-        timeout: 300000,
-        isTransaction: true,
-        transactionHash: res.response.transactionHash,
-        link: `${chain.viewUrl}/tx/${res.response.transactionHash}`,
-        title: `${direction === "long" ? lang['buy-order-failed'] : lang['sell-order-failed']}`
-      })
     }
     return true
   }
@@ -227,26 +220,40 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
   }
 
   useEffect(() => {
+    let interval = 0;
+    let timeout = 0
+    let time = 6000;
+    if (wallet.chainId && +wallet.chainId !== 56) {
+      time = 10000
+    }
     if (info) {
-      clearTimeout(timer)
-      getBetInfoTimeOut(getBetInfo)
       getBetInfo()
+      interval = window.setInterval(() => {
+        getBetInfo()
+      }, time)
       if (info.unit === "ETH") {
-        window.setTimeout(() => {
+        timeout = window.setTimeout(() => {
           getLiquidationInfo()
         }, 600)
       } else {
         getLiquidationInfo()
       }
     }
-  }, [wallet, info])
+    return () => {
+      window.clearInterval(interval)
+      window.clearTimeout(timeout)
+    }
+  }, [wallet, info, wallet.account, wallet.chainId])
 
   useEffect(() => {
     if (wallet.chainId && wallet.account && bToken) {
+      isInitBalance.current = true
+      setBalance("")
       getWalletBalance()
     }
-  }, [wallet, bToken])
+  }, [wallet.account, bToken,wallet])
   useEffect(() => {
+    setBToken("")
     if (bTokens.length) {
       setBToken(bTokens[0].bTokenSymbol)
       setBetInfo({})
@@ -322,18 +329,18 @@ export default function Card({ info, lang, bTokens, getLang, showCardModal }) {
       <div className='btn-box'>
         {betInfo.volume && betInfo.volume !== "0" ?
           <>
-            <div className='line-chart'><LineChart symbol={info.markpriceSymbol} color={+betInfo.pnl > 0 ? "#38CB89" : "#FF5630"} /></div>
-            <Button label={lang['close']} onClick={(e) => betClose(e)} className="btn close-btn" width="299" height="60" bgColor={+betInfo.pnl > 0 ? "#38CB891A" : "#FF56301A"} hoverBgColor={+betInfo.pnl > 0 ? "#38CB89" : "#FF5630"} borderSize={0} radius={14} fontColor={+betInfo.pnl > 0 ? "#38CB89" : "#FF5630"} />
+            <div className='line-chart'><LineChart symbol={info.symbol} pool={info.pool} chain={info.chain} color={+betInfo.pnl > 0 ? "#38CB89" : "#FF5630"} /></div>
+            <Button label={lang['close']} key="close" onClick={(e) => betClose(e)} className="btn close-btn" width="299" height="60" bgColor={+betInfo.pnl > 0 ? "#38CB891A" : "#FF56301A"} hoverBgColor={+betInfo.pnl > 0 ? "#38CB89" : "#FF5630"} borderSize={0} radius={14} fontColor={+betInfo.pnl > 0 ? "#38CB89" : "#FF5630"} />
           </>
           : !isLiquidated && <>
-            <Button label={lang['up']} onClick={(e) => openBet("up", e)} isAlert={true} disabled={disabled} className="btn up-btn" width="299" height="60" bgColor="#38CB891A" hoverBgColor="#38CB89" borderSize={0} radius={14} fontColor="#38CB89" icon='up' hoverIcon="up-hover" disabledIcon="up-disable" />
-            <Button label={lang['down']} onClick={(e) => openBet("down", e)} isAlert={true} disabled={disabled} className="btn down-btn" width="299" height="60" bgColor="#FF56301A" hoverBgColor="#FF5630" borderSize={0} radius={14} fontColor="#FF5630" icon='down' hoverIcon="down-hover" disabledIcon="down-disable" />
-            {info.powerSymbol && <Button label={lang['boosted-up']} isAlert={true} onClick={(e) => openBet("boostedUp", e)} disabled={disabled} className="btn boosted-btn" width="299" height="60" bgColor="#FFAB001A" hoverBgColor="#FFAB00" borderSize={0} radius={14} fontColor="#FFAB00" icon='boosted-up' hoverIcon="boosted-up-hover" disabledIcon="boosted-up-disable" tip={getLang('boosted-up-tip', { symbol: info.unit, powers: info.powerSymbol.symbol })} tipIcon='boosted-hint' hoverTipIcon="boosted-hint-hover" disabledTipIcon="boosted-hint-disable" />}
+            <Button label={lang['up']} key="up" onClick={(e) => openBet("up", e)} isAlert={true} disabled={disabled} className="btn up-btn" width="299" height="60" bgColor="#38CB891A" hoverBgColor="#38CB89" borderSize={0} radius={14} fontColor="#38CB89" icon='up' hoverIcon="up-hover" disabledIcon="up-disable" />
+            <Button label={lang['down']} key="down" onClick={(e) => openBet("down", e)} isAlert={true} disabled={disabled} className="btn down-btn" width="299" height="60" bgColor="#FF56301A" hoverBgColor="#FF5630" borderSize={0} radius={14} fontColor="#FF5630" icon='down' hoverIcon="down-hover" disabledIcon="down-disable" />
+            {info.powerSymbol && <Button key="boosted-up" label={lang['boosted-up']} isAlert={true} onClick={(e) => openBet("boostedUp", e)} disabled={disabled} className="btn boosted-btn" width="299" height="60" bgColor="#FFAB001A" hoverBgColor="#FFAB00" borderSize={0} radius={14} fontColor="#FFAB00" icon='boosted-up' hoverIcon="boosted-up-hover" disabledIcon="boosted-up-disable" tip={getLang('boosted-up-tip', { symbol: info.unit, powers: info.powerSymbol.symbol })} tipIcon='boosted-hint' hoverTipIcon="boosted-hint-hover" disabledTipIcon="boosted-hint-disable" />}
           </>}
         {isLiquidated && betInfo.volume === "0" ?
           <>
-            <div className='line-chart'><LineChart symbol={info.markpriceSymbol} color="#FF5630" /></div>
-            <Button label={lang['start-over']} onClick={(e) => e.preventDefault(), setIsLiquidated(false)} className="btn close-btn" width="299" height="60" bgColor="#FF56301A" hoverBgColor="#FF5630" borderSize={0} radius={14} fontColor="#FF5630" /></>
+            <div className='line-chart'><LineChart symbol={info.symbol} color="#FF5630" /></div>
+            <Button label={lang['start-over']} key="start-over" onClick={(e) => e.preventDefault(), setIsLiquidated(false)} className="btn close-btn" width="299" height="60" bgColor="#FF56301A" hoverBgColor="#FF5630" borderSize={0} radius={14} fontColor="#FF5630" /></>
           : null}
       </div>
 

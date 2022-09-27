@@ -1,12 +1,11 @@
-import styled from "styled-components"
+import styled ,{StyleSheetManager} from "styled-components"
 
 const images = require.context('../../assets/img', true)
 let imagesIncludeSrc ;
-if(process.env.NODE_ENV === 'development') {
+try {
+  imagesIncludeSrc = require.context('../../../../../../src/assets/img',true)
+} catch(e){
   // imagesIncludeSrc = require.context('../../../../bet-it/src/assets/img',true)
-  imagesIncludeSrc = require.context('../../../../../../src/assets/img',true)
-} else {
-  imagesIncludeSrc = require.context('../../../../../../src/assets/img',true)
 }
 
 const Wrapper = styled.img`
@@ -40,5 +39,5 @@ export default function Icon({width,height,token,secondary,className,onClick,sty
       }
     }
   }
-  return img ? <Wrapper src={img} width={width} height={height} style={{...style}} className={className} onClick={onClick} {...rest}/> : <Empty width={width} height={height} className={className}  ></Empty>
+  return img ? <StyleSheetManager disableCSSOMInjection><Wrapper src={img} width={width} height={height} style={{...style}} className={className} onClick={onClick} {...rest}/></StyleSheetManager> : <Empty width={width} height={height} className={className}  ></Empty>
 }
